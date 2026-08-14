@@ -156,6 +156,31 @@
     </details>
   </div>
 
+  <!-- Effort -->
+  <div class="bg-surface-card rounded-xl border border-border-default p-6">
+    <h2 class="text-lg font-semibold text-white mb-4">Effort</h2>
+    <p class="text-text-muted text-sm mb-4">
+      One dial for how hard this agent works: model strength, thinking budget, how many
+      tool calls it may make, and how long a single turn may run. Individual settings
+      below still override the tier.
+    </p>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div>
+        <%= form.label :effort, "Effort tier", class: "block text-sm font-medium text-text-primary mb-1" %>
+        <%= form.select :effort,
+            options_for_select(Agents::EffortTier.select_options, agent.effort.presence || Agents::EffortTier::DEFAULT),
+            {},
+            { class: "w-full px-4 py-3 bg-surface-raised border border-border-default rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-brand" } %>
+        <p class="text-text-faint text-xs mt-1">Standard matches Hivemind's default behavior.</p>
+      </div>
+      <div class="text-xs text-text-faint space-y-1 md:pt-7">
+        <% Agents::EffortTier::TIERS.each do |name, tier| %>
+          <p><span class="text-text-primary font-medium"><%= tier[:label] %></span> — <%= tier[:description] %></p>
+        <% end %>
+      </div>
+    </div>
+  </div>
+
   <!-- Thinking / Reasoning -->
   <div class="bg-surface-card rounded-xl border border-border-default p-6">
     <h2 class="text-lg font-semibold text-white mb-4">Thinking</h2>

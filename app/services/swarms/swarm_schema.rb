@@ -264,6 +264,10 @@ module Swarms
         errors << "#{prefix}.thinking_visibility '#{a[:thinking_visibility]}' is invalid (must be one of: #{VALID_THINKING_VISIBILITY.join(', ')})"
       end
 
+      if a[:effort].present? && !Agents::EffortTier.valid?(a[:effort])
+        errors << "#{prefix}.effort '#{a[:effort]}' is invalid (must be one of: #{Agents::EffortTier::NAMES.join(', ')})"
+      end
+
       if a.key?(:thinking_budget_tokens) && !a[:thinking_budget_tokens].nil?
         budget = a[:thinking_budget_tokens]
         if !budget.is_a?(Integer)

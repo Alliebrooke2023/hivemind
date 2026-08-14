@@ -72,12 +72,15 @@ module Agents
     # @param provider [String] "anthropic" or "openai"
     # @param message_text [String] the current user message
     # @param recent_tools [Array<String>] recent tool call names (most recent last)
+    # @param effort [String, nil] effort tier name; clamps the detected model
+    #   tier into the band that effort tier allows (see Agents::EffortTier)
     # @return [String] model ID to use for this turn
-    def self.route(provider:, message_text:, recent_tools: [])
+    def self.route(provider:, message_text:, recent_tools: [], effort: nil)
       return nil unless auto_supported?(provider)
 
       task = detect_task(message_text, recent_tools: recent_tools)
       tier = tier_for(task)
+      tier = Agents::EffortTier.clamp_model_tier(tier, effort) if effort.present?
 
       rules = rules_for(provider)
       tier_model = rules.dig("tiers", tier)

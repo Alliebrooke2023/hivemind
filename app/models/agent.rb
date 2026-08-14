@@ -62,6 +62,7 @@ class Agent < ApplicationRecord
   validates :role, presence: true
   validates :thinking_visibility, inclusion: { in: %w[hidden debug] }, allow_nil: true
   validates :thinking_budget_tokens, numericality: { greater_than: 0, less_than_or_equal_to: 128_000 }, if: :thinking_enabled?
+  validates :effort, inclusion: { in: Agents::EffortTier::NAMES }, allow_blank: true
   validate :validate_egress_policy
   validate :validate_no_self_reporting
   validate :validate_no_reporting_cycle
@@ -273,8 +274,28 @@ class Agent < ApplicationRecord
 
   public
 
-  def effective_tool_loop_config
-    DEFAULT_LOOP_CONFIG.deep_merge(tool_loop_config || {}).with_indifferent_access
+  # Layered so each level can be overridden by a more specific one:
+  #   DEFAULT_LOOP_CONFIG  →  effort tier  →  this agent's explicit config
+  #
+  # An agent hand-tuned before effort tiers existed keeps its settings,
+  # because tool_loop_config is still merged last.
+  def effective_tool_loop_config(session: nil, effort: nil)
+    tier = Agents::EffortTier.resolve_profile(agent: self, session:, effort:)
+
+    DEFAULT_LOOP_CONFIG
+      .deep_merge(tier[:tool_loop_config] || {})
+      .deep_merge(tool_loop_config || {})
+      .with_indifferent_access
+  end
+
+  # The effort tier in play for a given turn. A session may override the
+  # agent's configured default; an explicit argument overrides both.
+  def effective_effort(session: nil, effort: nil)
+    Agents::EffortTier.resolve(agent: self, session:, effort:)
+  end
+
+  def effort_profile(session: nil, effort: nil)
+    Agents::EffortTier.resolve_profile(agent: self, session:, effort:)
   end
 
   def context_window

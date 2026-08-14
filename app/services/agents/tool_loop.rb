@@ -20,11 +20,16 @@ module Agents
       @last_thinking = nil
       @total_usage = { input_tokens: 0, output_tokens: 0 }
       @tool_history = []
-      @loop_config = @agent.effective_tool_loop_config
+      @effort = Agents::EffortTier.resolve(agent: @agent, session: @session, effort: @options[:effort])
+      @loop_config = @agent.effective_tool_loop_config(session: @session, effort: @effort)
+      @max_loop_duration = Agents::EffortTier.loop_timeout_seconds(@effort)
       @context_manager = Agents::ContextManager.new(@agent.llm_model, @agent.max_output_tokens || 8192, provider: @agent.model_provider, agent: @agent)
       @decision_compactor = Agents::DecisionCompactor.new(context_manager: @context_manager, threshold: @context_manager.instance_variable_get(:@budget))
     end
 
+    # Retained for callers/specs that reference it. The live ceiling is
+    # per-run and comes from the resolved effort tier (see @max_loop_duration),
+    # clamped by TOOL_LOOP_TIMEOUT when an operator has set one.
     MAX_TOOL_LOOP_DURATION = ENV.fetch("TOOL_LOOP_TIMEOUT", 300).to_i # 5 min default
 
     def call
@@ -43,9 +48,9 @@ module Agents
         # Enforce wall-clock timeout to prevent runaway loops from holding
         # a Sidekiq thread indefinitely on constrained hardware.
         elapsed = Time.current - started_at
-        if elapsed > MAX_TOOL_LOOP_DURATION
-          broadcast(type: "token", content: "\n\n⏰ Tool loop timed out after #{elapsed.to_i}s")
-          Rails.logger.warn("[ToolLoop] Timed out after #{elapsed.to_i}s for session #{@session.id}")
+        if elapsed > @max_loop_duration
+          broadcast(type: "token", content: "\n\n⏰ Tool loop timed out after #{elapsed.to_i}s (effort: #{@effort})")
+          Rails.logger.warn("[ToolLoop] Timed out after #{elapsed.to_i}s for session #{@session.id} (effort=#{@effort}, ceiling=#{@max_loop_duration}s)")
           break
         end
 
