@@ -27,9 +27,11 @@ module Agents
       @decision_compactor = Agents::DecisionCompactor.new(context_manager: @context_manager, threshold: @context_manager.instance_variable_get(:@budget))
     end
 
-    # Retained for callers/specs that reference it. The live ceiling is
-    # per-run and comes from the resolved effort tier (see @max_loop_duration),
-    # clamped by TOOL_LOOP_TIMEOUT when an operator has set one.
+    # No longer read by the loop itself — the live ceiling is per-run and comes
+    # from the resolved effort tier (see @max_loop_duration), clamped by
+    # TOOL_LOOP_TIMEOUT when an operator has set one. Kept as a published
+    # constant because plugins may reference it; safe to drop once that's ruled
+    # out.
     MAX_TOOL_LOOP_DURATION = ENV.fetch("TOOL_LOOP_TIMEOUT", 300).to_i # 5 min default
 
     def call
