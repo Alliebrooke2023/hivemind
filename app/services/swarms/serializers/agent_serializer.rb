@@ -46,6 +46,10 @@ module Swarms
         hash["model"]        = @agent.llm_model     if @agent.llm_model.present?
         hash["model_config"] = @agent.model_config  if serialize_model_config?
 
+        # Omitted when it's the default, so exports stay diff-friendly.
+        effort = @agent.effort.to_s
+        hash["effort"] = effort if effort.present? && effort != Agents::EffortTier::DEFAULT
+
         serialize_thinking(hash)
         serialize_skills(hash)
         serialize_tools(hash)

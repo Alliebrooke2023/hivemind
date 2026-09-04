@@ -93,5 +93,36 @@ RSpec.describe Agents::ModelRouter do
         expect(described_class.route(provider: "anthropic", message_text: "hey")).to eq("claude-haiku-4-5")
       end
     end
+
+    context "with an effort tier" do
+      let(:cheap) { LlmModelRegistry::Anthropic::DEFAULT_CHEAP }
+      let(:top)   { LlmModelRegistry::Anthropic::DEFAULT_TOP }
+
+      it "caps an architecture task at the cheap model on quick" do
+        picked = described_class.route(
+          provider: "anthropic", message_text: "design the architecture", effort: "quick"
+        )
+        expect(picked).to eq(cheap)
+      end
+
+      it "raises a plain chat task to the top model on max" do
+        picked = described_class.route(
+          provider: "anthropic", message_text: "hey", effort: "max"
+        )
+        expect(picked).to eq(top)
+      end
+
+      it "leaves task detection alone on standard" do
+        with_effort = described_class.route(
+          provider: "anthropic", message_text: "hey", effort: "standard"
+        )
+        expect(with_effort).to eq(described_class.route(provider: "anthropic", message_text: "hey"))
+      end
+
+      it "ignores a nil effort" do
+        expect(described_class.route(provider: "anthropic", message_text: "hey", effort: nil))
+          .to eq(described_class.route(provider: "anthropic", message_text: "hey"))
+      end
+    end
   end
 end

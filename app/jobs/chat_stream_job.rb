@@ -122,13 +122,19 @@ class ChatStreamJob < ApplicationJob
     tools = resolve_tools(agent)
 
     begin
-      # Build LLM options (with thinking if enabled)
-      resolved_model = resolve_model(agent, effective_message)
-      llm_options = { model: resolved_model, max_tokens: agent.max_output_tokens || 8192 }
+      # Resolve the effort tier for this turn — it drives model tier, thinking
+      # budget, tool-call ceiling, and the loop's wall-clock timeout.
+      effort = Agents::EffortTier.resolve(agent: agent, session: session)
+      Rails.logger.info("[EffortTier] agent=#{agent.id} session=#{session.id} effort=#{effort}")
+
+      # Build LLM options (with thinking if the tier allows it)
+      resolved_model = resolve_model(agent, effective_message, effort)
+      llm_options = { model: resolved_model, max_tokens: agent.max_output_tokens || 8192, effort: effort }
       llm_options.merge!(agent.inference_options)
-      if agent.thinking_enabled?
+      thinking = Agents::EffortTier.thinking_for(agent, effort)
+      if thinking[:enabled]
         llm_options[:thinking_enabled] = true
-        llm_options[:thinking_budget_tokens] = agent.thinking_budget_tokens || 10_000
+        llm_options[:thinking_budget_tokens] = thinking[:budget_tokens]
       end
 
       # SDK-proxy path — default for OAuth (sk-ant-oat) tokens so chats run
@@ -147,7 +153,7 @@ class ChatStreamJob < ApplicationJob
       end
 
       thinking_content = nil
-      show_thinking = agent.thinking_enabled? && agent.thinking_visibility == "debug"
+      show_thinking = thinking[:enabled] && agent.thinking_visibility == "debug"
 
       Plugins::Hooks.trigger("before_chat", agent: agent, session: session, messages: messages)
 
@@ -384,16 +390,17 @@ class ChatStreamJob < ApplicationJob
   # its provider supports routing (anthropic or openai), delegate to
   # Agents::ModelRouter and log the picked model. Otherwise use the
   # pinned model verbatim.
-  def resolve_model(agent, user_message)
+  def resolve_model(agent, user_message, effort = Agents::EffortTier::DEFAULT)
     return agent.llm_model unless agent.llm_model.to_s == "auto"
     return agent.llm_model unless Agents::ModelRouter.auto_supported?(agent.model_provider)
 
     picked = Agents::ModelRouter.route(
       provider: agent.model_provider,
       message_text: user_message.to_s,
-      recent_tools: recent_tool_names(agent)
+      recent_tools: recent_tool_names(agent),
+      effort: effort
     )
-    Rails.logger.info("[ModelRouter] agent=#{agent.id} provider=#{agent.model_provider} picked=#{picked}")
+    Rails.logger.info("[ModelRouter] agent=#{agent.id} provider=#{agent.model_provider} effort=#{effort} picked=#{picked}")
     picked || Agents::ModelRouter::DEFAULT_RULES.dig(agent.model_provider, "tiers", "mid")
   end
 

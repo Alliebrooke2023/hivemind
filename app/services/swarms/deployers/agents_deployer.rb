@@ -123,6 +123,10 @@ module Swarms
         model_cfg = agent_hash[:model_config]
         attrs[:model_config] = model_cfg if model_cfg.is_a?(Hash)
 
+        if agent_hash[:effort].present?
+          attrs[:effort] = agent_hash[:effort].to_s
+        end
+
         if agent_hash.key?(:thinking_enabled)
           attrs[:thinking_enabled] = agent_hash[:thinking_enabled]
         end
