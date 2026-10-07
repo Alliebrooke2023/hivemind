@@ -19,7 +19,21 @@ module Agents
       /passwd/,
       /shadow/,
       /crontab/,
-      /vault_?entry|api_?key|secret|password|token/i
+      /vault_?entry|api_?key|secret|password|token/i,
+      # Container runtime. Reaching the Docker Engine API from a script is
+      # equivalent to root on the host, and the previous list had no pattern
+      # for it at all — so `curl -X POST http://docker-proxy:2375/...` scanned
+      # clean while `curl ... | bash` was blocked.
+      #
+      # Scripts now execute in the workspace container, which has no socket
+      # access, so this is defense in depth for single-container setups and
+      # for anyone who reverts that change.
+      /\bdocker\b/i,
+      /docker[-_]?proxy/i,
+      /docker\.sock/i,
+      /\bDOCKER_HOST\b/i,
+      /\b237[56]\b/,
+      /\b(kubectl|containerd|nerdctl|podman)\b/i
     ].freeze
 
     MAX_SCRIPT_LENGTH = 10_000

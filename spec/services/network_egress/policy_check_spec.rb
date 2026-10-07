@@ -5,6 +5,14 @@ require "rails_helper"
 RSpec.describe NetworkEgress::PolicyCheck do
   let(:agent) { create(:agent) }
 
+  # The address guard resolves hostnames before the policy is consulted, so
+  # stub DNS to keep these specs deterministic and runnable offline. A public
+  # address is the default; contexts that care override it.
+  before do
+    allow(Addrinfo).to receive(:getaddrinfo)
+      .and_return([ instance_double(Addrinfo, ip_address: "93.184.216.34") ])
+  end
+
   describe ".call" do
     context "with no egress policy" do
       it "allows all requests" do
@@ -105,28 +113,31 @@ RSpec.describe NetworkEgress::PolicyCheck do
       end
     end
 
+    # Uses public documentation ranges (RFC 5737) rather than RFC 1918
+    # addresses, so these exercise CIDR matching rather than tripping the
+    # address guard, which now denies private destinations outright.
     context "with CIDR notation" do
       before do
         agent.update!(egress_policy: {
           "mode" => "blocklist",
-          "rules" => [ { "pattern" => "10.0.0.0/8" } ],
+          "rules" => [ { "pattern" => "203.0.113.0/24" } ],
           "log_blocked" => false
         })
       end
 
       it "blocks IP within CIDR range" do
-        result = described_class.call(agent: agent, url: "http://10.1.2.3/internal")
+        result = described_class.call(agent: agent, url: "http://203.0.113.5/internal")
         expect(result.allowed?).to be false
       end
 
       it "allows IP outside CIDR range" do
-        result = described_class.call(agent: agent, url: "http://192.168.1.1/external")
+        result = described_class.call(agent: agent, url: "http://198.51.100.7/external")
         expect(result.allowed?).to be true
       end
 
       it "does not log when log_blocked is false" do
         expect {
-          described_class.call(agent: agent, url: "http://10.1.2.3/internal")
+          described_class.call(agent: agent, url: "http://203.0.113.5/internal")
         }.not_to change(AuditLog, :count)
       end
     end
@@ -162,6 +173,80 @@ RSpec.describe NetworkEgress::PolicyCheck do
         result = described_class.call(agent: agent, url: "not a url")
         expect(result.allowed?).to be false
         expect(result.reason).to include("invalid URL")
+      end
+    end
+
+    # Regression coverage for the SSRF hole this guard closes. Previously a
+    # blank policy meant "allow all", and the only check parsed the hostname
+    # as an IP literal — so `http://docker-proxy:2375` was permitted, giving
+    # an agent tool call a path to the Docker Engine API, i.e. host root.
+    context "address guard, with no egress policy configured" do
+      it "denies the Docker Engine API by port" do
+        result = described_class.call(agent: agent, url: "http://docker-proxy:2375/containers/json")
+        expect(result.allowed?).to be false
+        expect(result.reason).to include("Docker Engine API")
+      end
+
+      it "denies a hostname that resolves to a private address" do
+        allow(Addrinfo).to receive(:getaddrinfo)
+          .and_return([ instance_double(Addrinfo, ip_address: "172.18.0.4") ])
+
+        result = described_class.call(agent: agent, url: "http://docker-proxy/info")
+        expect(result.allowed?).to be false
+        expect(result.reason).to include("non-public address")
+      end
+
+      it "denies the cloud metadata endpoint" do
+        result = described_class.call(agent: agent, url: "http://169.254.169.254/latest/meta-data/")
+        expect(result.allowed?).to be false
+      end
+
+      it "denies loopback" do
+        result = described_class.call(agent: agent, url: "http://127.0.0.1:3000/")
+        expect(result.allowed?).to be false
+      end
+
+      it "denies a host that cannot be resolved, rather than failing open" do
+        allow(Addrinfo).to receive(:getaddrinfo).and_raise(SocketError)
+
+        result = described_class.call(agent: agent, url: "http://nope.invalid/")
+        expect(result.allowed?).to be false
+        expect(result.reason).to include("could not resolve")
+      end
+
+      it "still allows public destinations" do
+        result = described_class.call(agent: agent, url: "https://example.com/page")
+        expect(result.allowed?).to be true
+      end
+
+      it "audits guard denials even when log_blocked is unset" do
+        expect {
+          described_class.call(agent: agent, url: "http://127.0.0.1/")
+        }.to change(AuditLog, :count).by(1)
+      end
+    end
+
+    context "address guard, with an explicit allowlist" do
+      it "permits a private address that was deliberately allowlisted" do
+        agent.update!(egress_policy: {
+          "mode" => "allowlist",
+          "rules" => [ { "pattern" => "10.1.2.3" } ],
+          "log_blocked" => false
+        })
+
+        result = described_class.call(agent: agent, url: "http://10.1.2.3/internal")
+        expect(result.allowed?).to be true
+      end
+
+      it "still refuses the Docker Engine API, which no policy may override" do
+        agent.update!(egress_policy: {
+          "mode" => "allowlist",
+          "rules" => [ { "pattern" => "docker-proxy" } ],
+          "log_blocked" => false
+        })
+
+        result = described_class.call(agent: agent, url: "http://docker-proxy:2375/containers/json")
+        expect(result.allowed?).to be false
       end
     end
   end

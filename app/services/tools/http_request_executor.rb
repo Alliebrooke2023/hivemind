@@ -150,9 +150,19 @@ module Tools
       method = (@input["method"] || "GET").upcase
       return ServiceResponse.failure(error: "Invalid method: #{method}") unless ALLOWED_METHODS.include?(method)
 
-      # Security: block private IPs in production
-      if Rails.env.production? && private_ip?(url)
-        return ServiceResponse.failure(error: "Requests to private IPs are not allowed")
+      # Security: defense in depth. Tools::Executor runs the full,
+      # policy-aware egress check at the chokepoint; this repeats only the
+      # non-overridable tier (the Docker Engine API), so a direct executor
+      # call cannot reach the container runtime. The private-address tier is
+      # left to the chokepoint, which knows whether this agent's policy
+      # explicitly allowlists an internal host.
+      #
+      # Not gated on RAILS_ENV: docker-compose.dev.yml runs
+      # RAILS_ENV=development, so a production-only guard left `bin/dev-up`
+      # with no protection at all.
+      guard = NetworkEgress::AddressGuard.check(url)
+      if !guard.allowed? && guard.hard
+        return ServiceResponse.failure(error: "Blocked by egress guard: #{guard.reason}")
       end
 
       headers = (@input["headers"] || {}).merge("Accept" => "application/json")
@@ -235,26 +245,6 @@ module Tools
       JSON.parse(str)
     rescue JSON::ParserError
       str.truncate(10_000)
-    end
-
-    def private_ip?(url)
-      host = URI.parse(url).host
-      return false unless host
-
-      ip = IPAddr.new(host) rescue nil
-      return false unless ip
-
-      private_ranges = [
-        IPAddr.new("10.0.0.0/8"),
-        IPAddr.new("172.16.0.0/12"),
-        IPAddr.new("192.168.0.0/16"),
-        IPAddr.new("127.0.0.0/8"),
-        IPAddr.new("169.254.0.0/16")
-      ]
-
-      private_ranges.any? { |range| range.include?(ip) }
-    rescue StandardError
-      false
     end
   end
 end
