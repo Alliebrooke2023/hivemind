@@ -20,16 +20,22 @@ module NetworkEgress
       policy = @agent.effective_egress_policy
       mode = policy[:mode]
 
-      # No policy or disabled → allow all
-      return allow("no egress policy") if mode.blank? || mode == "disabled"
-
       uri = parse_uri
       return deny("invalid URL: #{@url}") unless uri
 
       host = uri.host
       port = uri.port
-
       rules = Array(policy[:rules])
+
+      # The address guard runs before, and independently of, the per-agent
+      # policy. Previously a blank policy meant "allow all", which let an
+      # agent with no configuration reach internal services — including the
+      # Docker Engine API, i.e. root on the host.
+      guard_result = apply_address_guard(host, port, mode, rules, policy)
+      return guard_result if guard_result
+
+      # No policy or disabled → allow any destination the guard accepted
+      return allow("no egress policy") if mode.blank? || mode == "disabled"
 
       case mode
       when "allowlist"
@@ -42,6 +48,43 @@ module NetworkEgress
     end
 
     private
+
+    # @return [Result, nil] a denial, or nil when the destination is acceptable
+    def apply_address_guard(host, port, mode, rules, policy)
+      guard = AddressGuard.check(@url)
+      return nil if guard.allowed?
+
+      # Hard denials (the Docker Engine API) are never overridable — there is
+      # no legitimate reason to allowlist an agent into the container runtime.
+      # Soft denials (private/loopback destinations) can be overridden by an
+      # explicit allowlist entry, so reaching a real internal API stays
+      # possible but has to be chosen deliberately.
+      if !guard.hard && mode == "allowlist" && rules.any? { |rule| matches_rule?(host, port, rule) }
+        return nil
+      end
+
+      log_guard_denial(host, port, guard)
+      deny("egress guard: #{guard.reason}")
+    end
+
+    # Guard denials are security events, so they are recorded regardless of
+    # the policy's log_blocked flag.
+    def log_guard_denial(host, port, guard)
+      AuditLog.record(
+        actor_type: "agent",
+        actor_id: @agent.id,
+        action: "network_egress.guard_blocked",
+        metadata: {
+          url: @url,
+          host:,
+          port:,
+          reason: guard.reason,
+          hard: guard.hard
+        }
+      )
+    rescue StandardError => e
+      Rails.logger.error("[NetworkEgress] failed to audit guard denial: #{e.message}")
+    end
 
     def check_allowlist(host, port, rules, policy)
       if rules.any? { |rule| matches_rule?(host, port, rule) }

@@ -15,6 +15,15 @@ module Tools
       uri = URI.parse(url)
       return ServiceResponse.failure(error: "Invalid URL") unless uri.is_a?(URI::HTTP) || uri.is_a?(URI::HTTPS)
 
+      # Security: this executor previously had no address check of its own and
+      # relied entirely on the per-agent egress policy, which defaults to
+      # allow-all. Enforce the non-overridable tier here as well; the
+      # policy-aware private-address tier runs at the Tools::Executor chokepoint.
+      guard = NetworkEgress::AddressGuard.check(url)
+      if !guard.allowed? && guard.hard
+        return ServiceResponse.failure(error: "Blocked by egress guard: #{guard.reason}")
+      end
+
       http = Net::HTTP.new(uri.host, uri.port)
       http.use_ssl = uri.scheme == "https"
       http.open_timeout = TIMEOUT
